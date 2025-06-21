@@ -3,9 +3,23 @@ from flask_cors import CORS
 import pandas as pd
 import re
 import os
+import google.generativeai as genai
+import json
 
 app = Flask(__name__)
 CORS(app) # Ini akan mengizinkan request dari semua origin
+
+# Konfigurasi Gemini API
+# Pastikan Anda sudah set environment variable GEMINI_API_KEY
+try:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not set.")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    print(f"Error initializing Gemini model: {e}")
+    model = None
 
 # Simple keyword-based classifier
 CATEGORY_KEYWORDS = {
@@ -30,6 +44,52 @@ def classify():
     desc = data.get('description', '')
     category = classify_description(desc)
     return jsonify({'category': category})
+
+@app.route('/generate-plan', methods=['POST'])
+def generate_plan():
+    if model is None:
+        return jsonify({"error": "Gemini model is not initialized. Check API Key."}), 500
+
+    data = request.json
+    prompt = data.get('prompt')
+
+    if not prompt:
+        return jsonify({"error": "Prompt is missing"}), 400
+
+    try:
+        response = model.generate_content(prompt)
+        
+        # Ekstrak teks dan bersihkan untuk mendapatkan JSON yang valid
+        raw_text = response.text
+        
+        # Pendekatan yang lebih kuat untuk mengekstrak blok kode JSON
+        # Menemukan ```json ... ``` dan mengambil isinya
+        match = re.search(r'```json\s*([\s\S]+?)\s*```', raw_text)
+
+        if match:
+            json_string = match.group(1)
+        else:
+            # Jika format markdown tidak ditemukan, coba cari array/objek JSON mentah
+            # Ini membantu jika AI hanya mengembalikan JSON tanpa markdown
+            json_match = re.search(r'(\[[\s\S]*\]|\{[\s\S]*\})', raw_text)
+            if not json_match:
+                print(f"Warning: Could not extract JSON from Gemini response. Raw text: {raw_text}")
+                return jsonify({"error": "Failed to parse AI response. No JSON block found.", "details": raw_text}), 500
+            json_string = json_match.group(0)
+
+        # Hapus komentar (jika ada) dan coba parse
+        json_string = re.sub(r'//.*', '', json_string)
+        budget_plan = json.loads(json_string)
+        
+        return jsonify(budget_plan)
+
+    except json.JSONDecodeError as e:
+        print(f"Error: Failed to decode JSON. String attempted: '{json_string}'. Original text: '{raw_text}'")
+        return jsonify({"error": f"Invalid JSON format received from AI. Details: {e}", "details": raw_text}), 500
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route('/predict-budget', methods=['POST'])
 def predict_budget():

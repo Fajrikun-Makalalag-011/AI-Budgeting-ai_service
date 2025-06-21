@@ -1,4 +1,5 @@
 flask
-pandas 
+pandas
+flask_cors
 gunicorn
-flask-cors 
+google-generativeai 
